@@ -489,7 +489,7 @@ The project was developed and tested with Python 3.14.
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/rudraksh25060-csds/ai-coding-harness.git
+git clone https://github.com/rudrakshk25060-csds/ai-coding-harness.git
 cd ai-coding-harness
 ```
 
@@ -655,7 +655,7 @@ test_model_adapters.py
 Expected result:
 
 ```text
-53 passed
+63 passed
 ```
 
 ### Live Gemini Connection Test
@@ -859,6 +859,8 @@ ai-coding-harness/
 │       └── test_calculator.py
 │
 ├── main.py
+├── Makefile
+├── requirements.txt
 ├── test_gemini.py
 ├── pytest.ini
 ├── .env.example
