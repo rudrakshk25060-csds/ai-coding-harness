@@ -241,9 +241,10 @@ class Orchestrator:
                 "your changes work correctly."
             ),
             "VERIFY": (
-                "You are in the VERIFY phase. Run git_diff to inspect all changes. "
-                "Make sure only intended files were modified and the changes look correct. "
-                "Then use finish to complete the task."
+                "You are in the VERIFY phase. Tests have passed! "
+                "1. If you have not yet run `git_diff`, run `git_diff` now to inspect your changes. "
+                "2. If `git_diff` has already been inspected and changes are correct, call `finish` with a summary of the fix. "
+                "Always respond in JSON with action: 'git_diff' or 'finish'."
             ),
             "RECOVER": (
                 "You are in RECOVERY mode. A previous attempt failed. "
@@ -263,11 +264,20 @@ class Orchestrator:
         try:
             result = self.model.generate_json(SYSTEM_PROMPT, user_prompt)
         except ModelError as e:
+            # Check if model produced natural language declaring completion
+            try:
+                raw_text = self.model.generate(SYSTEM_PROMPT, user_prompt)
+                if any(kw in raw_text.lower() for kw in ["all tests pass", "bug is fixed", "task is complete", "verified the fix"]) and \
+                   len(self.context.test_results) > 0 and self.context.test_results[-1].get("all_passed"):
+                    return {"thought": "Task verified and tests pass", "action": "finish", "arguments": {"summary": raw_text.strip()[:300]}}
+            except Exception:
+                pass
             # Try once more with explicit JSON instruction
             try:
                 retry_prompt = (
-                    user_prompt + "\n\nIMPORTANT: Respond with ONLY a valid JSON object. "
-                    "No markdown, no explanation, just JSON."
+                    user_prompt + "\n\nCRITICAL: Respond with ONLY a valid JSON object matching:\n"
+                    '{"thought": "...", "action": "tool_name", "arguments": {...}}\n'
+                    "Do NOT include any commentary outside the JSON."
                 )
                 result = self.model.generate_json(SYSTEM_PROMPT, retry_prompt)
             except ModelError as e2:
@@ -380,6 +390,13 @@ class Orchestrator:
         """Auto-advance the state machine based on actions taken."""
         state = self.context.current_state
 
+        # Passing tests always transition to VERIFY
+        if action_name == "run_tests":
+            meta = result.get("metadata", {})
+            if meta.get("all_passed", False):
+                self.context.set_state("VERIFY")
+            return
+
         if state == "UNDERSTAND":
             # After reading files, move to EXPLORE
             if action_name in ("list_files", "read_file"):
@@ -388,32 +405,30 @@ class Orchestrator:
 
         elif state == "EXPLORE":
             # After sufficient exploration, move to PLAN
-            if len(self.context.tool_results) >= 3:
+            if len(self.context.tool_results) >= 2 or len(self.context.relevant_files) >= 2:
                 self.context.set_state("PLAN")
 
         elif state == "PLAN":
-            # Model can plan then move to IMPLEMENT
-            if action_name in ("read_file", "search_code", "list_files"):
+            # Model can plan then move to IMPLEMENT, or apply patch directly
+            if action_name == "apply_patch" and result.get("success"):
+                self.context.set_state("TEST")
+            elif action_name in ("read_file", "search_code", "list_files"):
                 pass  # Still planning/exploring
             else:
                 self.context.set_state("IMPLEMENT")
 
         elif state == "IMPLEMENT":
             # After applying patches, move to TEST
-            if action_name == "apply_patch" and result["success"]:
+            if action_name == "apply_patch" and result.get("success"):
                 self.context.set_state("TEST")
 
         elif state == "TEST":
-            # Tests determine next state
-            if action_name == "run_tests":
-                meta = result.get("metadata", {})
-                if meta.get("all_passed", False):
-                    self.context.set_state("VERIFY")
-                # Failure handled in _handle_test_failure
+            # If patch applied in TEST, stay ready to test
+            pass
 
         elif state == "RECOVER":
-            # After recovery action, go to IMPLEMENT or TEST
-            if action_name == "apply_patch" and result["success"]:
+            # After recovery action, go to TEST
+            if action_name == "apply_patch" and result.get("success"):
                 self.context.set_state("TEST")
             elif action_name in ("read_file", "search_code"):
                 pass  # Still diagnosing
