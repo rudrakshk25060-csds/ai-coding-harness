@@ -278,26 +278,55 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
         return {"success": False, "error": f"run_command error: {e}", "output": "", "metadata": {}}
 
 
-def run_tests(test_path: str = "", repo_path: str = ".", timeout: int = 60) -> dict:
-    """Run pytest tests within the repository.
+def run_tests(test_path: str = "", test_cmd: str = "", repo_path: str = ".", timeout: int = 60) -> dict:
+    """Run tests within the repository.
+    
+    Supports pytest, python -m unittest, or custom commands.
     
     Args:
         test_path: Specific test file or directory. Empty = run all tests.
+        test_cmd: Explicit custom test command to run.
         repo_path: Repository root.
         timeout: Max seconds for test execution.
     """
-    cmd = f'"{sys.executable}" -m pytest {test_path} -v --tb=short 2>&1' if test_path else f'"{sys.executable}" -m pytest -v --tb=short 2>&1'
+    if test_cmd:
+        cmd = f"{test_cmd} 2>&1"
+    elif test_path:
+        cmd = f'"{sys.executable}" -m pytest {test_path} -v --tb=short 2>&1'
+    else:
+        cmd = f'"{sys.executable}" -m pytest -v --tb=short 2>&1'
+
     result = run_command(cmd, repo_path, timeout)
     
-    # Parse test summary
+    # If pytest was not found or failed to collect tests, check if unittest works
     output = result["output"]
+    if ("No module named pytest" in output or "command not found" in output) and not test_cmd:
+        fallback_cmd = f'"{sys.executable}" -m unittest discover -v 2>&1'
+        result = run_command(fallback_cmd, repo_path, timeout)
+        output = result["output"]
+
+    # Parse test summary (supports pytest and unittest formats)
     passed_match = re.search(r"(\d+)\s+passed", output)
     failed_match = re.search(r"(\d+)\s+failed", output)
     error_match = re.search(r"(\d+)\s+error", output)
     
-    passed = int(passed_match.group(1)) if passed_match else len(re.findall(r"\bPASSED\b", output))
-    failed = int(failed_match.group(1)) if failed_match else len(re.findall(r"\bFAILED\b", output))
-    errors = int(error_match.group(1)) if error_match else len(re.findall(r"\bERROR\b", output))
+    unittest_ran = re.search(r"Ran\s+(\d+)\s+tests?", output)
+    unittest_ok = bool(re.search(r"\bOK\b", output) and unittest_ran)
+    unittest_fail = re.search(r"FAILED\s+\((?:failures=(\d+))?(?:,\s*)?(?:errors=(\d+))?\)", output)
+    
+    if unittest_ok:
+        passed = int(unittest_ran.group(1))
+        failed = 0
+        errors = 0
+    elif unittest_fail:
+        failed = int(unittest_fail.group(1) or 0)
+        errors = int(unittest_fail.group(2) or 0)
+        total = int(unittest_ran.group(1)) if unittest_ran else failed + errors
+        passed = max(0, total - failed - errors)
+    else:
+        passed = int(passed_match.group(1)) if passed_match else len(re.findall(r"\bPASSED\b", output))
+        failed = int(failed_match.group(1)) if failed_match else len(re.findall(r"\bFAILED\b", output))
+        errors = int(error_match.group(1)) if error_match else len(re.findall(r"\bERROR\b", output))
     
     all_passed = (result["success"] or result["metadata"].get("exit_code") == 0) and failed == 0 and errors == 0 and passed > 0
     
@@ -350,8 +379,8 @@ TOOL_REGISTRY = {
     },
     "run_tests": {
         "function": run_tests,
-        "description": "Run pytest tests.",
-        "parameters": {"test_path": "Test file or dir (empty for all)"},
+        "description": "Run tests (pytest, unittest, or custom). Supports pytest by default, falls back to unittest if pytest is unavailable. Use test_cmd for custom commands like 'npm test' or 'make test'.",
+        "parameters": {"test_path": "Test file or dir (empty for all)", "test_cmd": "Custom test command (e.g. 'npm test', 'make test')"},
     },
     "git_diff": {
         "function": git_diff,

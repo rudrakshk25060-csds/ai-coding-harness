@@ -71,6 +71,7 @@ class Orchestrator:
         self.context = ContextManager(task, repo_path)
         self.recovery = RecoveryManager(self.context)
         self.verifier = Verifier(self.context)
+        self.max_iterations = MAX_ITERATIONS
         self.metrics = {
             "model_calls": 0,
             "tool_calls": 0,
@@ -123,11 +124,11 @@ class Orchestrator:
         # Set initial state
         self.context.set_state("UNDERSTAND")
 
-        for iteration in range(1, MAX_ITERATIONS + 1):
+        for iteration in range(1, self.max_iterations + 1):
             self.context.iteration = iteration
             state = self.context.current_state
 
-            print(f"\n--- Iteration {iteration}/{MAX_ITERATIONS} | State: {state} ---")
+            print(f"\n--- Iteration {iteration}/{self.max_iterations} | State: {state} ---")
 
             if state == "DONE":
                 return {"status": "DONE", "verification": None}

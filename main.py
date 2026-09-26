@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""AI Coding Harness - Main entry point.
+"""AI Coding Harness - Autonomous coding agent entry point.
 
 Usage:
+    # Run on the built-in demo repo
     python main.py "Fix the bug in examples/demo_repo and run the tests"
-    python main.py --repo /path/to/repo "Task description"
+
+    # Run on ANY real repository
+    python main.py --repo /path/to/your/project "Fix the failing tests"
+    python main.py --repo ~/projects/myapp "Refactor the login module and verify tests"
+    python main.py --repo . "Find and fix the bug causing test_payment to fail"
+
+    # Customize iteration budget
+    python main.py --repo /path/to/repo --max-iterations 20 "Complex refactoring task"
 """
 import sys
 import os
+import argparse
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,69 +27,93 @@ from harness.orchestrator import Orchestrator
 
 def main():
     """Main entry point for the AI coding harness."""
-    # Parse arguments
-    args = sys.argv[1:]
-    
-    if not args or args[0] in ("--help", "-h"):
-        print("Usage: python main.py [--repo REPO_PATH] \"task description\"")
-        print("\nExamples:")
-        print('  python main.py "Fix the failing test in examples/demo_repo"')
-        print('  python main.py --repo /path/to/repo "Fix the bug and run tests"')
-        sys.exit(0)
-    
-    # Parse --repo flag
-    repo_path = None
-    task = None
-    
-    i = 0
-    while i < len(args):
-        if args[i] == "--repo" and i + 1 < len(args):
-            repo_path = args[i + 1]
-            i += 2
-        else:
-            task = args[i]
-            i += 1
-    
-    if not task:
-        print("Error: No task provided.")
-        print("Usage: python main.py \"task description\"")
-        sys.exit(1)
-    
-    # Default repo path: if task mentions demo_repo, use it
+    parser = argparse.ArgumentParser(
+        description="AI Coding Harness — Autonomous coding agent powered by Gemini",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Built-in demo (fix a deliberate calculator bug)
+  python main.py "Fix the bug in examples/demo_repo and verify with tests"
+
+  # Point at any real repository on disk
+  python main.py --repo /path/to/project "Fix the failing test_login test"
+  python main.py --repo ~/my-app "Refactor utils.py and make sure all tests pass"
+  python main.py --repo . "Find and fix the bug in the payment module"
+
+  # Increase iteration budget for complex tasks
+  python main.py --repo /path/to/repo --max-iterations 20 "Large refactor task"
+        """,
+    )
+    parser.add_argument(
+        "task",
+        help="Description of the coding task to perform (in quotes)",
+    )
+    parser.add_argument(
+        "--repo",
+        default=None,
+        help="Path to the target repository (default: auto-detect from task, or current harness dir)",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Override max agent iterations (default: 12)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed tool output during execution",
+    )
+
+    args = parser.parse_args()
+    task = args.task
+    repo_path = args.repo
+
+    # Determine repo path
     if repo_path is None:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         if "demo_repo" in task or "demo" in task.lower():
             repo_path = os.path.join(script_dir, "examples", "demo_repo")
         else:
+            # Default to project root (where main.py lives)
             repo_path = script_dir
     
-    repo_path = os.path.abspath(repo_path)
-    
+    repo_path = os.path.abspath(os.path.expanduser(repo_path))
+
     if not os.path.isdir(repo_path):
         print(f"Error: Repository path does not exist: {repo_path}")
         sys.exit(1)
-    
+
     # Validate configuration
     try:
         validate_config()
     except RuntimeError as e:
         print(f"Configuration error: {e}")
+        print("\nTo fix: Create a .env file with your Gemini API key:")
+        print("  echo 'GEMINI_API_KEY=your_key_here' > .env")
+        print("  echo 'GEMINI_MODEL=gemini-3.8-flash' >> .env")
+        print("\nGet a free key at: https://aistudio.google.com/")
         sys.exit(1)
-    
+
     config = get_config_summary()
     print(f"Configuration: model={config['model']}, api_key_set={config['api_key_set']}")
-    
+
     # Initialize model
     try:
         model = GeminiModel()
     except Exception as e:
         print(f"Failed to initialize model: {e}")
         sys.exit(1)
-    
+
     # Run the orchestrator
     orchestrator = Orchestrator(task=task, repo_path=repo_path, model=model)
+
+    # Override max iterations if specified
+    if args.max_iterations:
+        orchestrator.max_iterations = args.max_iterations
+
     result = orchestrator.run()
-    
+
     # Exit code
     status = result.get("status", "UNKNOWN")
     if status == "DONE":
