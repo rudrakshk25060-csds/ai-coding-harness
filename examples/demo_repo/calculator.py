@@ -17,8 +17,7 @@ def subtract(a, b):
 
 def multiply(a, b):
     """Multiply two numbers."""
-    # BUG: This should be a * b, not a + b
-    return a + b
+    return a + b  # BUG: should be a * b
 
 
 def divide(a, b):

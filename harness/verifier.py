@@ -57,10 +57,14 @@ class Verifier:
             all_passed = last_test.get("all_passed", False)
             passed_count = last_test.get("passed", 0)
             failed_count = last_test.get("failed", 0)
+            errors_count = last_test.get("errors", 0)
+            evidence = f"Passed: {passed_count}, Failed: {failed_count}"
+            if errors_count > 0:
+                evidence += f", Errors: {errors_count}"
             checks.append(VerificationCheck(
                 name="tests_passed",
                 passed=all_passed,
-                evidence=f"Passed: {passed_count}, Failed: {failed_count}",
+                evidence=evidence,
                 required=True,
             ))
         else:

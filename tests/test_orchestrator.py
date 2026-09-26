@@ -107,3 +107,37 @@ def test_orchestrator_state_transitions(tmp_path):
     assert result["verification"]["passed"] is True
     assert orchestrator.metrics["test_runs"] >= 1
     assert orchestrator.metrics["model_calls"] >= 4
+
+
+def test_verifier_arbitrary_large_count_passes():
+    """Verifier dynamically passes arbitrary large test counts (e.g. 750 tests)."""
+    ctx = ContextManager("Fix bug", "/mock/repo")
+    ctx.record_test_result({"passed": 750, "failed": 0, "errors": 0, "all_passed": True})
+    v = Verifier(ctx)
+    res = v.verify("Fixed the bug with full suite pass")
+    check_tests = next(c for c in res.checks if c["name"] == "tests_passed")
+    assert check_tests["passed"] is True
+    assert "Passed: 750, Failed: 0" in check_tests["evidence"]
+
+
+def test_verifier_single_failure_in_large_suite_fails():
+    """Verifier fails when even 1 test fails in a 750-test suite."""
+    ctx = ContextManager("Fix bug", "/mock/repo")
+    ctx.record_test_result({"passed": 749, "failed": 1, "errors": 0, "all_passed": False})
+    v = Verifier(ctx)
+    res = v.verify("Fixed the bug")
+    assert res.passed is False
+    assert "tests_passed" in res.failures
+    check_tests = next(c for c in res.checks if c["name"] == "tests_passed")
+    assert check_tests["passed"] is False
+    assert "Passed: 749, Failed: 1" in check_tests["evidence"]
+
+
+def test_verifier_empty_or_zero_test_count_fails():
+    """Verifier fails if zero tests passed."""
+    ctx = ContextManager("Fix bug", "/mock/repo")
+    ctx.record_test_result({"passed": 0, "failed": 0, "errors": 0, "all_passed": False})
+    v = Verifier(ctx)
+    res = v.verify("Done")
+    assert res.passed is False
+    assert "tests_passed" in res.failures

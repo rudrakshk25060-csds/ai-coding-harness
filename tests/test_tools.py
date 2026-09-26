@@ -10,6 +10,7 @@ from harness.tools import (
     read_file,
     apply_patch,
     run_command,
+    run_tests,
     execute_tool,
 )
 
@@ -138,3 +139,69 @@ def test_execute_tool_unknown(temp_repo):
     res = execute_tool(action, temp_repo)
     assert res["success"] is False
     assert "Unknown tool" in res["error"]
+
+
+def test_run_tests_arbitrary_large_count_passes(monkeypatch):
+    """Test output parsing dynamically handles large test suites (e.g. 524 tests)."""
+    fake_pytest_output = (
+        "test_suite.py::test_001 PASSED\n"
+        "test_suite.py::test_524 PASSED\n"
+        "========================= 524 passed in 14.23s =========================\n"
+    )
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": True,
+        "output": fake_pytest_output,
+        "error": "",
+        "metadata": {"exit_code": 0}
+    })
+    res = run_tests(repo_path=".")
+    assert res["metadata"]["passed"] == 524
+    assert res["metadata"]["failed"] == 0
+    assert res["metadata"]["errors"] == 0
+    assert res["metadata"]["all_passed"] is True
+
+
+def test_run_tests_large_suite_with_failure(monkeypatch):
+    """A single failure among hundreds of tests marks all_passed as False."""
+    fake_pytest_output = (
+        "test_suite.py::test_001 PASSED\n"
+        "test_suite.py::test_499 FAILED\n"
+        "=================== 1 failed, 523 passed in 14.23s ====================\n"
+    )
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": False,
+        "output": fake_pytest_output,
+        "error": "Exit code: 1",
+        "metadata": {"exit_code": 1}
+    })
+    res = run_tests(repo_path=".")
+    assert res["metadata"]["passed"] == 523
+    assert res["metadata"]["failed"] == 1
+    assert res["metadata"]["all_passed"] is False
+
+
+def test_run_tests_empty_output(monkeypatch):
+    """Empty test runner output does not pass verification."""
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": False,
+        "output": "",
+        "error": "Command failed",
+        "metadata": {"exit_code": 1}
+    })
+    res = run_tests(repo_path=".")
+    assert res["metadata"]["passed"] == 0
+    assert res["metadata"]["failed"] == 0
+    assert res["metadata"]["all_passed"] is False
+
+
+def test_run_tests_invalid_garbage_output(monkeypatch):
+    """Unparseable/garbage test runner output does not pass verification."""
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": False,
+        "output": "Fatal python error: Segmentation fault\ncore dumped",
+        "error": "Exit code: 139",
+        "metadata": {"exit_code": 139}
+    })
+    res = run_tests(repo_path=".")
+    assert res["metadata"]["passed"] == 0
+    assert res["metadata"]["all_passed"] is False

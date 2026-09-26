@@ -624,7 +624,7 @@ make test
 python -m pytest -q
 ```
 
-The current test suite contains **56 tests** covering the core harness components.
+The current test suite contains **63 tests** covering the core harness components.
 
 ### Test Coverage
 
