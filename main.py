@@ -21,7 +21,7 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from harness.config import validate_config, get_config_summary
-from harness.model import GeminiModel
+from harness.model import create_model_provider, GeminiModel
 from harness.orchestrator import Orchestrator
 
 
@@ -60,6 +60,16 @@ Examples:
         help="Override max agent iterations (default: 12)",
     )
     parser.add_argument(
+        "--provider",
+        default=None,
+        help="Model provider: gemini, deepseek, or qwen (default: from MODEL_PROVIDER env or gemini)",
+    )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model name override (e.g. gemini-3.8-flash, deepseek-flash, qwen-turbo)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Show detailed tool output during execution",
@@ -68,6 +78,7 @@ Examples:
     args = parser.parse_args()
     task = args.task
     repo_path = args.repo
+    provider = args.provider
 
     # Determine repo path
     if repo_path is None:
@@ -84,23 +95,22 @@ Examples:
         print(f"Error: Repository path does not exist: {repo_path}")
         sys.exit(1)
 
-    # Validate configuration
+    # Validate configuration for the active provider
     try:
-        validate_config()
+        validate_config(provider=provider)
     except RuntimeError as e:
         print(f"Configuration error: {e}")
-        print("\nTo fix: Create a .env file with your Gemini API key:")
-        print("  echo 'GEMINI_API_KEY=your_key_here' > .env")
-        print("  echo 'GEMINI_MODEL=gemini-3.8-flash' >> .env")
-        print("\nGet a free key at: https://aistudio.google.com/")
+        print("\nTo configure, set the appropriate variables in your .env file:")
+        print("  MODEL_PROVIDER=gemini | deepseek | qwen")
+        print("  GEMINI_API_KEY=... / DEEPSEEK_API_KEY=... / QWEN_API_KEY=...")
         sys.exit(1)
 
-    config = get_config_summary()
-    print(f"Configuration: model={config['model']}, api_key_set={config['api_key_set']}")
+    config = get_config_summary(provider=provider)
+    print(f"Configuration: provider={config['provider']}, model={config['model']}, api_key_set={config['api_key_set']}")
 
-    # Initialize model
+    # Initialize model via factory
     try:
-        model = GeminiModel()
+        model = create_model_provider(provider_name=provider, model_name=args.model)
     except Exception as e:
         print(f"Failed to initialize model: {e}")
         sys.exit(1)

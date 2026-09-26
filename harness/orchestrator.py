@@ -6,7 +6,7 @@ Recovery: TEST → RECOVER → IMPLEMENT → TEST
 import json
 import time
 from harness.config import MAX_ITERATIONS, MAX_RECOVERY_ATTEMPTS
-from harness.model import GeminiModel, ModelError
+from harness.model import ModelAdapter, create_model_provider, ModelError
 from harness.context import ContextManager, ToolResult
 from harness.tools import execute_tool, TOOL_REGISTRY
 from harness.recovery import RecoveryManager
@@ -64,10 +64,10 @@ class Orchestrator:
     through verification, with bounded execution and recovery.
     """
 
-    def __init__(self, task: str, repo_path: str, model: GeminiModel = None):
+    def __init__(self, task: str, repo_path: str, model: ModelAdapter = None):
         self.task = task
         self.repo_path = repo_path
-        self.model = model or GeminiModel()
+        self.model = model or create_model_provider()
         self.context = ContextManager(task, repo_path)
         self.recovery = RecoveryManager(self.context)
         self.verifier = Verifier(self.context)
