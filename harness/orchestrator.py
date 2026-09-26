@@ -158,7 +158,10 @@ class Orchestrator:
 
             # Handle finish action
             if action_name == "finish":
-                return self._handle_finish(arguments.get("summary", ""))
+                finish_result = self._handle_finish(arguments.get("summary", ""))
+                if finish_result is not None:
+                    return finish_result
+                continue
 
             # Execute the tool
             result = self._execute_action(action)
@@ -259,7 +262,7 @@ class Orchestrator:
 
         try:
             result = self.model.generate_json(SYSTEM_PROMPT, user_prompt)
-        except ModelError:
+        except ModelError as e:
             # Try once more with explicit JSON instruction
             try:
                 retry_prompt = (
@@ -267,13 +270,39 @@ class Orchestrator:
                     "No markdown, no explanation, just JSON."
                 )
                 result = self.model.generate_json(SYSTEM_PROMPT, retry_prompt)
-            except ModelError:
+            except ModelError as e2:
+                self.context.add_observation(f"Failed to parse model JSON: {e2}")
                 return None
+
+        if not isinstance(result, dict):
+            self.context.add_observation("Response must be a JSON object with 'action' and 'arguments'.")
+            return None
 
         # Validate the action
         action_name = result.get("action", "")
+        aliases = {
+            "run_test": "run_tests",
+            "test": "run_tests",
+            "pytest": "run_tests",
+            "patch": "apply_patch",
+            "diff": "git_diff",
+            "status": "git_status",
+            "read": "read_file",
+            "list": "list_files",
+            "search": "search_code",
+        }
+        if action_name in aliases:
+            action_name = aliases[action_name]
+            result["action"] = action_name
+
         if action_name not in TOOL_REGISTRY:
+            self.context.add_observation(
+                f"Unknown action '{action_name}'. Valid actions: {list(TOOL_REGISTRY.keys())}"
+            )
             return None
+
+        if "arguments" not in result or not isinstance(result["arguments"], dict):
+            result["arguments"] = {}
 
         return result
 

@@ -1,5 +1,6 @@
 """Tool system - safe tools for the coding agent to interact with repositories."""
 import os
+import sys
 import subprocess
 import re
 from pathlib import Path
@@ -241,6 +242,11 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
                 "metadata": {},
             }
         
+        cmd_env = {
+            **os.environ,
+            "PATH": f"{os.path.dirname(sys.executable)}:{os.environ.get('PATH', '')}",
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
         result = subprocess.run(
             command,
             shell=True,
@@ -248,7 +254,7 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            env=cmd_env,
         )
         
         output = result.stdout
@@ -280,20 +286,26 @@ def run_tests(test_path: str = "", repo_path: str = ".", timeout: int = 60) -> d
         repo_path: Repository root.
         timeout: Max seconds for test execution.
     """
-    cmd = f"python -m pytest {test_path} -v --tb=short 2>&1" if test_path else "python -m pytest -v --tb=short 2>&1"
+    cmd = f'"{sys.executable}" -m pytest {test_path} -v --tb=short 2>&1' if test_path else f'"{sys.executable}" -m pytest -v --tb=short 2>&1'
     result = run_command(cmd, repo_path, timeout)
     
     # Parse test summary
     output = result["output"]
-    passed = len(re.findall(r"PASSED", output))
-    failed = len(re.findall(r"FAILED", output))
-    errors = len(re.findall(r"ERROR", output))
+    passed_match = re.search(r"(\d+)\s+passed", output)
+    failed_match = re.search(r"(\d+)\s+failed", output)
+    error_match = re.search(r"(\d+)\s+error", output)
+    
+    passed = int(passed_match.group(1)) if passed_match else len(re.findall(r"\bPASSED\b", output))
+    failed = int(failed_match.group(1)) if failed_match else len(re.findall(r"\bFAILED\b", output))
+    errors = int(error_match.group(1)) if error_match else len(re.findall(r"\bERROR\b", output))
+    
+    all_passed = (result["success"] or result["metadata"].get("exit_code") == 0) and failed == 0 and errors == 0 and passed > 0
     
     result["metadata"].update({
         "passed": passed,
         "failed": failed,
         "errors": errors,
-        "all_passed": failed == 0 and errors == 0 and passed > 0,
+        "all_passed": all_passed,
     })
     
     return result
