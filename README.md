@@ -655,7 +655,7 @@ test_model_adapters.py
 Expected result:
 
 ```text
-63 passed
+72 passed
 ```
 
 ### Live Gemini Connection Test
