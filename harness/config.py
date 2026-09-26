@@ -7,17 +7,20 @@ load_dotenv()
 # Model Provider Selection (gemini, deepseek, qwen)
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "gemini").lower()
 
-# Gemini Configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Evaluator generic API key
+AI_API_KEY = os.getenv("AI_API_KEY", "")
+
+# Gemini Configuration (uses GEMINI_API_KEY, falls back to AI_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or AI_API_KEY
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
-# DeepSeek Configuration (OpenAI-compatible)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+# DeepSeek Configuration (uses DEEPSEEK_API_KEY, falls back to AI_API_KEY)
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "") or AI_API_KEY
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
 
-# Qwen Configuration (OpenAI-compatible)
-QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
+# Qwen Configuration (uses QWEN_API_KEY, falls back to AI_API_KEY)
+QWEN_API_KEY = os.getenv("QWEN_API_KEY", "") or AI_API_KEY
 QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen-turbo")
 QWEN_BASE_URL = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
@@ -39,19 +42,19 @@ def validate_config(provider: str = None):
     """Validate that required configuration is present for the active provider."""
     active_provider = (provider or MODEL_PROVIDER).lower()
     if active_provider in ("gemini", "google"):
-        if not GEMINI_API_KEY:
+        if not (GEMINI_API_KEY or AI_API_KEY):
             raise RuntimeError(
-                "GEMINI_API_KEY is not set. Add it to .env file."
+                "GEMINI_API_KEY is not set (and AI_API_KEY fallback not provided). Add it to .env file."
             )
     elif active_provider == "deepseek":
-        if not DEEPSEEK_API_KEY:
+        if not (DEEPSEEK_API_KEY or AI_API_KEY):
             raise RuntimeError(
-                "DEEPSEEK_API_KEY is not set. Add it to .env file or environment."
+                "DEEPSEEK_API_KEY is not set (and AI_API_KEY fallback not provided). Add it to .env file or environment."
             )
     elif active_provider in ("qwen", "dashscope"):
-        if not QWEN_API_KEY:
+        if not (QWEN_API_KEY or AI_API_KEY):
             raise RuntimeError(
-                "QWEN_API_KEY is not set. Add it to .env file or environment."
+                "QWEN_API_KEY is not set (and AI_API_KEY fallback not provided). Add it to .env file or environment."
             )
     else:
         raise RuntimeError(

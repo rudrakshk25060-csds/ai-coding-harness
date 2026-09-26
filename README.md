@@ -493,58 +493,84 @@ git clone https://github.com/rudraksh25060-csds/ai-coding-harness.git
 cd ai-coding-harness
 ```
 
-### Create a Virtual Environment
+### Quickstart with Makefile
+
+The project includes a standard `Makefile` for one-command evaluation:
+
+```bash
+# 1. Install all dependencies (creates .venv if needed)
+make setup
+
+# 2. Run the complete unit test suite (offline, no API key needed)
+make test
+
+# 3. Start the harness on the demo repository
+make run
+
+# 4. Clean build and cache artifacts
+make clean
+```
+
+You can also pass custom tasks or arguments to `make run`:
+
+```bash
+make run ARGS='--provider deepseek "Fix the bug in examples/demo_repo and verify it with tests"'
+```
+
+---
+
+### Manual Setup & Virtual Environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### Install Dependencies
+---
 
-```bash
-pip install google-genai python-dotenv pytest
-```
+### Environment Variables & Evaluator Configuration
 
-### Configure Environment
+Create a `.env` file in the project root or export variables in your shell.
 
-Create a `.env` file in the project root.
-
-#### Gemini
+#### Generic Evaluator Key (`AI_API_KEY`)
+The harness supports **`AI_API_KEY`** as a universal generic key. If the evaluator supplies `AI_API_KEY`, the harness automatically routes it to whichever model provider is selected (`gemini`, `deepseek`, or `qwen`):
 
 ```env
-MODEL_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-3.8-flash
-```
+# Evaluator generic API key (acts as fallback for any provider)
+AI_API_KEY=your_evaluator_api_key_here
 
-#### DeepSeek
-
-```env
+# Selected model provider (gemini, deepseek, or qwen)
 MODEL_PROVIDER=deepseek
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-DEEPSEEK_MODEL=deepseek-flash
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ```
 
-#### Qwen
+#### Provider-Specific Configuration
 
-```env
-MODEL_PROVIDER=qwen
-QWEN_API_KEY=your_qwen_api_key_here
-QWEN_MODEL=qwen-turbo
-QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-```
+| Variable | Description | Default |
+|---|---|---|
+| `MODEL_PROVIDER` | Active foundation model provider (`gemini`, `deepseek`, `qwen`) | `gemini` |
+| `AI_API_KEY` | Generic evaluator API key (fallback for any provider) | *(none)* |
+| `GEMINI_API_KEY` | Google Gemini API key | *(falls back to `AI_API_KEY`)* |
+| `GEMINI_MODEL` | Gemini model name | `gemini-3.8-flash` |
+| `DEEPSEEK_API_KEY` | DeepSeek API key | *(falls back to `AI_API_KEY`)* |
+| `DEEPSEEK_MODEL` | DeepSeek model name | `deepseek-flash` |
+| `DEEPSEEK_BASE_URL` | DeepSeek API base URL | `https://api.deepseek.com/v1` |
+| `QWEN_API_KEY` | Qwen API key | *(falls back to `AI_API_KEY`)* |
+| `QWEN_MODEL` | Qwen model name | `qwen-turbo` |
+| `QWEN_BASE_URL` | Qwen API base URL | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 
-A safe template is provided in:
-
+#### Key Precedence
 ```text
-.env.example
+Provider-Specific Key (e.g. DEEPSEEK_API_KEY)
+       ↓ (if not set)
+Generic Key (AI_API_KEY)
 ```
+
+A safe template is provided in `.env.example`.
 
 ### Security Note
 
-`.env` is excluded through `.gitignore`.
+`.env` is strictly excluded through `.gitignore`.
 
 **Never commit API keys, tokens, credentials, or other secrets to Git.**
 
@@ -552,7 +578,17 @@ A safe template is provided in:
 
 ## How to Run
 
-### General Invocation
+### Using Make
+
+```bash
+# Run default demo task
+make run
+
+# Run custom task with arguments
+make run ARGS='--repo examples/demo_repo "Fix the bug and verify with tests"'
+```
+
+### Direct Invocation
 
 ```bash
 python main.py [--repo /path/to/repo] "Task description"
@@ -583,10 +619,12 @@ MODEL_PROVIDER=gemini
 Run the complete unit test suite:
 
 ```bash
+make test
+# OR directly:
 python -m pytest -q
 ```
 
-The current test suite contains **53 tests** covering the core harness components.
+The current test suite contains **56 tests** covering the core harness components.
 
 ### Test Coverage
 

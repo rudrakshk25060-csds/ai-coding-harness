@@ -327,3 +327,25 @@ def test_validate_config_per_provider():
 
     with patch("harness.config.QWEN_API_KEY", "qwen-key-123"):
         assert validate_config(provider="qwen") is True
+
+
+def test_ai_api_key_fallback_for_deepseek():
+    """AI_API_KEY acts as fallback when DEEPSEEK_API_KEY is not set."""
+    with patch("harness.config.DEEPSEEK_API_KEY", ""), \
+         patch("harness.config.AI_API_KEY", "generic-ai-key-456"):
+        assert validate_config(provider="deepseek") is True
+
+
+def test_ai_api_key_fallback_for_qwen():
+    """AI_API_KEY acts as fallback when QWEN_API_KEY is not set."""
+    with patch("harness.config.QWEN_API_KEY", ""), \
+         patch("harness.config.AI_API_KEY", "generic-ai-key-456"):
+        assert validate_config(provider="qwen") is True
+
+
+def test_ai_api_key_fallback_for_gemini():
+    """AI_API_KEY acts as fallback when GEMINI_API_KEY is not set."""
+    with patch("harness.config.GEMINI_API_KEY", ""), \
+         patch("harness.config.AI_API_KEY", "generic-ai-key-456"):
+        assert validate_config(provider="gemini") is True
+
