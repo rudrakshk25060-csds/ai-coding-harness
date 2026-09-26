@@ -14,12 +14,28 @@ def test_gemini_connection():
 
     client = genai.Client(api_key=api_key)
 
-    print(f"Testing Gemini model: {model}")
+    models_to_try = [model]
+    for fb in ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"]:
+        if fb not in models_to_try:
+            models_to_try.append(fb)
 
-    response = client.models.generate_content(
-        model=model,
-        contents="Respond with exactly: GEMINI_CONNECTION_OK",
-    )
+    response = None
+    for m in models_to_try:
+        try:
+            print(f"Testing Gemini model: {m}")
+            response = client.models.generate_content(
+                model=m,
+                contents="Respond with exactly: GEMINI_CONNECTION_OK",
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) or "503" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "UNAVAILABLE" in str(e):
+                print(f"  ({m} temporary issue, trying next model...)")
+                continue
+            raise
+
+    if response is None:
+        raise RuntimeError("All candidate models exhausted")
 
     print("\nModel response:")
     print(response.text)

@@ -43,20 +43,35 @@ class GeminiModel:
         self.call_count += 1
         self.total_input_chars += len(system_prompt) + len(user_prompt)
         
-        try:
-            response = self._client.models.generate_content(
-                model=self._model_name,
-                contents=user_prompt,
-                config={
-                    "system_instruction": system_prompt,
-                    "temperature": temperature,
-                },
-            )
-            text = response.text or ""
-            self.total_output_chars += len(text)
-            return text
-        except Exception as e:
-            raise ModelError(f"Gemini API error: {type(e).__name__}: {e}") from e
+        models_to_try = [self._model_name]
+        for fallback in ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview"]:
+            if fallback not in models_to_try:
+                models_to_try.append(fallback)
+
+        last_error = None
+        for model_candidate in models_to_try:
+            try:
+                response = self._client.models.generate_content(
+                    model=model_candidate,
+                    contents=user_prompt,
+                    config={
+                        "system_instruction": system_prompt,
+                        "temperature": temperature,
+                    },
+                )
+                if model_candidate != self._model_name:
+                    print(f"  [Model fallback: using {model_candidate} due to quota limit]")
+                    self._model_name = model_candidate
+                text = response.text or ""
+                self.total_output_chars += len(text)
+                return text
+            except Exception as e:
+                last_error = e
+                if any(err in str(e) for err in ["429", "503", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "quota"]):
+                    continue
+                raise ModelError(f"Gemini API error: {type(e).__name__}: {e}") from e
+
+        raise ModelError(f"Gemini API error (all models exhausted): {last_error}") from last_error
 
     def generate_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.1) -> dict:
         """Generate a response and parse it as JSON.
