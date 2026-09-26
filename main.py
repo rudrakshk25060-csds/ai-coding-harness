@@ -74,6 +74,16 @@ Examples:
         action="store_true",
         help="Show detailed tool output during execution",
     )
+    parser.add_argument(
+        "--test-cmd",
+        default=None,
+        help="Explicit test command override (e.g. 'pytest', 'npm test', 'cargo test')",
+    )
+    parser.add_argument(
+        "--result-json",
+        default=None,
+        help="Path to write machine-readable result JSON",
+    )
 
     args = parser.parse_args()
     task = args.task
@@ -88,7 +98,7 @@ Examples:
         else:
             # Default to project root (where main.py lives)
             repo_path = script_dir
-    
+
     repo_path = os.path.abspath(os.path.expanduser(repo_path))
 
     if not os.path.isdir(repo_path):
@@ -116,13 +126,31 @@ Examples:
         sys.exit(1)
 
     # Run the orchestrator
-    orchestrator = Orchestrator(task=task, repo_path=repo_path, model=model)
+    orchestrator = Orchestrator(task=task, repo_path=repo_path, model=model, test_cmd=args.test_cmd)
 
     # Override max iterations if specified
     if args.max_iterations:
         orchestrator.max_iterations = args.max_iterations
 
     result = orchestrator.run()
+
+    # Write machine-readable result JSON if requested
+    if args.result_json:
+        v_data = result.get("verification") or {}
+        out_data = {
+            "status": "VERIFIED" if (result.get("status") == "DONE" and v_data.get("passed")) else result.get("status", "FAILED"),
+            "verification": {
+                "command": v_data.get("command", orchestrator.test_cmd or "pytest"),
+                "exit_code": v_data.get("exit_code", 0 if v_data.get("passed") else 1),
+                "success": bool(v_data.get("passed")),
+                "passed": v_data.get("passed_count", 0),
+                "failed": v_data.get("failed_count", 0),
+            },
+            "metrics": orchestrator.metrics,
+        }
+        os.makedirs(os.path.dirname(os.path.abspath(args.result_json)), exist_ok=True)
+        with open(args.result_json, "w") as f:
+            json.dump(out_data, f, indent=2)
 
     # Exit code
     status = result.get("status", "UNKNOWN")

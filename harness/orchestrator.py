@@ -8,7 +8,7 @@ import time
 from harness.config import MAX_ITERATIONS, MAX_RECOVERY_ATTEMPTS
 from harness.model import ModelAdapter, create_model_provider, ModelError
 from harness.context import ContextManager, ToolResult
-from harness.tools import execute_tool, TOOL_REGISTRY
+from harness.tools import execute_tool, run_tests, TOOL_REGISTRY
 from harness.recovery import RecoveryManager
 from harness.verifier import Verifier
 
@@ -59,12 +59,12 @@ Do NOT use multiple actions in one response.
 
 class Orchestrator:
     """Core agent loop implementing the state machine.
-    
+
     Manages the lifecycle of a coding task from understanding
     through verification, with bounded execution and recovery.
     """
 
-    def __init__(self, task: str, repo_path: str, model: ModelAdapter = None):
+    def __init__(self, task: str, repo_path: str, model: ModelAdapter = None, test_cmd: str = None):
         self.task = task
         self.repo_path = repo_path
         self.model = model or create_model_provider()
@@ -83,10 +83,24 @@ class Orchestrator:
             "elapsed_time": 0,
         }
         self._start_time = time.time()
+        self.last_test_path = ""
+        # Priority for test command:
+        # 1. Explicitly passed test_cmd
+        # 2. Explicit command in task description
+        # 3. Auto-detected from repository markers
+        self.test_cmd = test_cmd or ""
+        if not self.test_cmd:
+            for known in ["npm test", "cargo test", "go test ./...", "go test", "make test"]:
+                if known in task.lower():
+                    self.test_cmd = known
+                    break
+        if not self.test_cmd:
+            from harness.tools import detect_test_command
+            self.test_cmd = detect_test_command(repo_path)
 
     def run(self) -> dict:
         """Execute the full agent loop.
-        
+
         Returns:
             Dict with final status, verification result, and metrics.
         """
@@ -182,9 +196,15 @@ class Orchestrator:
 
             if action_name in ("run_tests",):
                 self.metrics["test_runs"] += 1
+                if arguments.get("test_path"):
+                    self.last_test_path = arguments["test_path"]
+                if arguments.get("test_cmd"):
+                    self.test_cmd = arguments["test_cmd"]
                 test_meta = result.get("metadata", {})
+                if test_meta.get("command"):
+                    self.test_cmd = test_meta["command"]
                 self.context.record_test_result(test_meta)
-                
+
                 if not result["success"] or not test_meta.get("all_passed", False):
                     # Test failure - enter recovery
                     self._handle_test_failure(result)
@@ -319,13 +339,39 @@ class Orchestrator:
 
     def _execute_action(self, action: dict) -> dict:
         """Execute a validated action."""
+        action_name = action.get("action", "")
+        arguments = action.get("arguments", {})
+        if action_name == "run_tests" and not arguments.get("test_cmd") and self.test_cmd:
+            arguments["test_cmd"] = self.test_cmd
         return execute_tool(action, self.repo_path)
 
     def _handle_finish(self, summary: str) -> dict:
-        """Handle the finish action with verification."""
+        """Handle the finish action with fresh verification."""
         print(f"\n📋 Model wants to finish: {summary[:200]}")
 
-        # Run verification
+        # FRESH verification: execute tests right now against current filesystem state
+        print("  🔄 Running fresh verification tests...")
+        fresh_result = run_tests(
+            test_path=self.last_test_path,
+            test_cmd=self.test_cmd,
+            repo_path=self.repo_path,
+        )
+        self.metrics["test_runs"] += 1
+        fresh_meta = fresh_result.get("metadata", {})
+        if fresh_meta.get("command"):
+            self.test_cmd = fresh_meta["command"]
+        self.context.record_test_result(fresh_meta)
+
+        # Record tool result so verifier knows fresh tests ran after any edits
+        self.context.add_tool_result(ToolResult(
+            tool="run_tests",
+            arguments={"test_path": self.last_test_path, "test_cmd": self.test_cmd},
+            success=fresh_result["success"],
+            output=fresh_result.get("output", "")[:2000],
+            error=fresh_result.get("error", ""),
+        ))
+
+        # Run verification checks
         verification = self.verifier.verify(summary)
 
         if verification.passed:
@@ -339,6 +385,10 @@ class Orchestrator:
                     "failures": verification.failures,
                     "evidence": verification.evidence,
                     "summary": verification.summary,
+                    "command": self.test_cmd or fresh_meta.get("command", "pytest"),
+                    "exit_code": fresh_meta.get("exit_code", 0),
+                    "passed_count": fresh_meta.get("passed", 0),
+                    "failed_count": fresh_meta.get("failed", 0),
                 },
             }
         else:
@@ -351,11 +401,11 @@ class Orchestrator:
                 f"Must address: {', '.join(verification.failures)}"
             )
 
-            # If tests weren't run, go to TEST state
-            if "tests_executed" in verification.failures:
+            # Connect failure directly to existing RecoveryManager
+            if "tests_passed" in verification.failures or not fresh_meta.get("all_passed", False):
+                self._handle_test_failure(fresh_result)
+            elif "tests_executed" in verification.failures:
                 self.context.set_state("TEST")
-            elif "tests_passed" in verification.failures:
-                self.context.set_state("RECOVER")
             else:
                 self.context.set_state("VERIFY")
 
@@ -368,15 +418,29 @@ class Orchestrator:
             self.context.set_state("FAILED")
             return
 
+        cmd = result.get("metadata", {}).get("command") or self.test_cmd or "pytest"
+        exit_code = result.get("metadata", {}).get("exit_code", -1)
+        output = result.get("output", "")
+
         record = self.recovery.create_failure_record(
             failure_type="test_failure",
-            command="pytest",
-            exit_code=result.get("metadata", {}).get("exit_code", -1),
-            output=result.get("output", ""),
+            command=cmd,
+            exit_code=exit_code,
+            output=output,
         )
 
         self.recovery.increment_recovery()
         self.metrics["recovery_attempts"] += 1
+
+        # Provide detailed failure evidence to the model
+        evidence_text = (
+            f"TEST FAILURE EVIDENCE:\n"
+            f"- Command: {cmd}\n"
+            f"- Exit Code: {exit_code}\n"
+            f"- Failure Output:\n{output[:1500]}\n"
+            f"- Recovery Attempt: {self.recovery.context.recovery_attempts}/{MAX_RECOVERY_ATTEMPTS}"
+        )
+        self.context.add_observation(evidence_text)
 
         if self.recovery.is_repeated_failure(record):
             print("  🔄 Repeated failure detected - forcing strategy change")

@@ -14,21 +14,21 @@ class ToolError(Exception):
 
 def _safe_path(path: str, repo_path: str) -> str:
     """Resolve and validate a path is within the repository.
-    
+
     Raises ToolError if the path escapes the repository.
     """
     repo = Path(repo_path).resolve()
     target = (repo / path).resolve() if not Path(path).is_absolute() else Path(path).resolve()
-    
-    if not str(target).startswith(str(repo)):
+
+    if not target.is_relative_to(repo):
         raise ToolError(f"Path '{path}' is outside the repository '{repo}'")
-    
+
     # Check forbidden paths
     rel = str(target.relative_to(repo))
     for forbidden in FORBIDDEN_PATHS:
-        if rel == forbidden or rel.startswith(forbidden):
+        if rel == forbidden or rel.startswith(forbidden + "/") or rel.startswith(forbidden + "\\"):
             raise ToolError(f"Access to '{rel}' is forbidden")
-    
+
     return str(target)
 
 
@@ -43,18 +43,18 @@ def _truncate(text: str, max_chars: int = None) -> str:
 
 def list_files(path: str = ".", repo_path: str = ".") -> dict:
     """List files in a directory within the repository.
-    
+
     Returns a structured result with file listing.
     """
     try:
         safe = _safe_path(path, repo_path)
         if not os.path.isdir(safe):
             return {"success": False, "error": f"Not a directory: {path}", "output": "", "metadata": {}}
-        
+
         files = []
         for root, dirs, filenames in os.walk(safe):
             # Skip hidden dirs and common non-essential dirs
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in 
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in
                        ("__pycache__", ".venv", "venv", "node_modules", ".git")]
             for f in sorted(filenames):
                 if f.startswith(".") and f != ".gitignore":
@@ -62,7 +62,7 @@ def list_files(path: str = ".", repo_path: str = ".") -> dict:
                 full = os.path.join(root, f)
                 rel = os.path.relpath(full, repo_path)
                 files.append(rel)
-        
+
         output = "\n".join(files)
         return {
             "success": True,
@@ -78,18 +78,18 @@ def list_files(path: str = ".", repo_path: str = ".") -> dict:
 
 def search_code(query: str, path: str = ".", repo_path: str = ".") -> dict:
     """Search for a pattern in code files within the repository.
-    
+
     Uses simple string matching (or regex if query looks like a pattern).
     """
     try:
         safe = _safe_path(path, repo_path)
         matches = []
-        
+
         # Determine if query is regex
         is_regex = any(c in query for c in r"[](){}*+?|^$\\")
-        
+
         for root, dirs, filenames in os.walk(safe):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in 
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in
                        ("__pycache__", ".venv", "venv", "node_modules", ".git")]
             for fname in sorted(filenames):
                 if fname.endswith((".pyc", ".pyo", ".so", ".o", ".bin", ".exe")):
@@ -117,7 +117,7 @@ def search_code(query: str, path: str = ".", repo_path: str = ".") -> dict:
                     break
             if len(matches) >= 50:
                 break
-        
+
         output = "\n".join(matches) if matches else "No matches found."
         return {
             "success": True,
@@ -137,10 +137,10 @@ def read_file(path: str, repo_path: str = ".") -> dict:
         safe = _safe_path(path, repo_path)
         if not os.path.isfile(safe):
             return {"success": False, "error": f"File not found: {path}", "output": "", "metadata": {}}
-        
+
         with open(safe, "r", errors="replace") as f:
             content = f.read()
-        
+
         line_count = content.count("\n") + 1
         return {
             "success": True,
@@ -156,10 +156,10 @@ def read_file(path: str, repo_path: str = ".") -> dict:
 
 def apply_patch(path: str, original: str, replacement: str, repo_path: str = ".") -> dict:
     """Apply a targeted patch to a file.
-    
+
     Finds 'original' text in the file and replaces it with 'replacement'.
     This is safer than rewriting entire files.
-    
+
     Args:
         path: File path relative to repo.
         original: The exact text to find and replace.
@@ -168,14 +168,14 @@ def apply_patch(path: str, original: str, replacement: str, repo_path: str = "."
     """
     try:
         safe = _safe_path(path, repo_path)
-        
+
         if os.path.isfile(safe):
             with open(safe, "r") as f:
                 content = f.read()
         else:
             # Creating a new file
             content = ""
-        
+
         if original == "" and content == "":
             # New file creation
             new_content = replacement
@@ -197,13 +197,13 @@ def apply_patch(path: str, original: str, replacement: str, repo_path: str = "."
                 new_content = content[:idx] + replacement + content[idx + len(original):]
             else:
                 new_content = content.replace(original, replacement)
-        
+
         # Ensure directory exists
         os.makedirs(os.path.dirname(safe) or ".", exist_ok=True)
-        
+
         with open(safe, "w") as f:
             f.write(new_content)
-        
+
         return {
             "success": True,
             "output": f"Patch applied to {path}",
@@ -218,7 +218,7 @@ def apply_patch(path: str, original: str, replacement: str, repo_path: str = "."
 
 def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
     """Run a shell command within the repository.
-    
+
     Safety: Commands run with cwd set to repo_path.
     Output is truncated to prevent context overflow.
     """
@@ -232,16 +232,21 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
                     "output": "",
                     "metadata": {},
                 }
-        
+
         # Prevent accessing secrets
-        if "GEMINI_API_KEY" in command and ("echo" in command or "print" in command or "cat" in command):
-            return {
-                "success": False,
-                "error": "Cannot expose API keys via commands",
-                "output": "",
-                "metadata": {},
-            }
-        
+        _SECRET_KEY_NAMES = [
+            "AI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
+            "QWEN_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+        ]
+        for key_name in _SECRET_KEY_NAMES:
+            if key_name in command and ("echo" in command or "print" in command or "cat" in command or "env" in command):
+                return {
+                    "success": False,
+                    "error": "Cannot expose API keys via commands",
+                    "output": "",
+                    "metadata": {},
+                }
+
         cmd_env = {
             **os.environ,
             "PATH": f"{os.path.dirname(sys.executable)}:{os.environ.get('PATH', '')}",
@@ -256,11 +261,17 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
             timeout=timeout,
             env=cmd_env,
         )
-        
+
         output = result.stdout
         if result.stderr:
             output += "\nSTDERR:\n" + result.stderr
-        
+
+        # Redact actual secret values from output
+        for key_name in _SECRET_KEY_NAMES:
+            val = os.environ.get(key_name, "")
+            if val and len(val) >= 6:
+                output = output.replace(val, "[REDACTED]")
+
         return {
             "success": result.returncode == 0,
             "output": _truncate(output),
@@ -278,42 +289,67 @@ def run_command(command: str, repo_path: str = ".", timeout: int = 30) -> dict:
         return {"success": False, "error": f"run_command error: {e}", "output": "", "metadata": {}}
 
 
+def detect_test_command(repo_path: str = ".") -> str:
+    """Lightweight detection of test command based on repository markers.
+
+    Checks for common ecosystem files while preserving Python/pytest default.
+    """
+    repo = Path(repo_path)
+    if (repo / "package.json").exists():
+        return "npm test"
+    if (repo / "go.mod").exists():
+        return "go test ./..."
+    if (repo / "Cargo.toml").exists():
+        return "cargo test"
+    return ""
+
+
 def run_tests(test_path: str = "", test_cmd: str = "", repo_path: str = ".", timeout: int = 60) -> dict:
     """Run tests within the repository.
-    
+
     Supports pytest, python -m unittest, or custom commands.
-    
+
     Args:
         test_path: Specific test file or directory. Empty = run all tests.
         test_cmd: Explicit custom test command to run.
         repo_path: Repository root.
         timeout: Max seconds for test execution.
     """
+    detected_cmd = ""
     if test_cmd:
         cmd = f"{test_cmd} 2>&1"
+        executed_cmd = test_cmd
     elif test_path:
         cmd = f'"{sys.executable}" -m pytest {test_path} -v --tb=short 2>&1'
+        executed_cmd = f"pytest {test_path}"
     else:
-        cmd = f'"{sys.executable}" -m pytest -v --tb=short 2>&1'
+        detected_cmd = detect_test_command(repo_path)
+        if detected_cmd:
+            cmd = f"{detected_cmd} 2>&1"
+            executed_cmd = detected_cmd
+        else:
+            cmd = f'"{sys.executable}" -m pytest -v --tb=short 2>&1'
+            executed_cmd = "pytest"
 
     result = run_command(cmd, repo_path, timeout)
-    
+
     # If pytest was not found or failed to collect tests, check if unittest works
     output = result["output"]
-    if ("No module named pytest" in output or "command not found" in output) and not test_cmd:
+    if ("No module named pytest" in output or "command not found" in output) and not test_cmd and not detected_cmd:
         fallback_cmd = f'"{sys.executable}" -m unittest discover -v 2>&1'
         result = run_command(fallback_cmd, repo_path, timeout)
         output = result["output"]
+        executed_cmd = "unittest"
 
     # Parse test summary (supports pytest and unittest formats)
     passed_match = re.search(r"(\d+)\s+passed", output)
     failed_match = re.search(r"(\d+)\s+failed", output)
     error_match = re.search(r"(\d+)\s+error", output)
-    
+
     unittest_ran = re.search(r"Ran\s+(\d+)\s+tests?", output)
     unittest_ok = bool(re.search(r"\bOK\b", output) and unittest_ran)
     unittest_fail = re.search(r"FAILED\s+\((?:failures=(\d+))?(?:,\s*)?(?:errors=(\d+))?\)", output)
-    
+
     if unittest_ok:
         passed = int(unittest_ran.group(1))
         failed = 0
@@ -327,16 +363,32 @@ def run_tests(test_path: str = "", test_cmd: str = "", repo_path: str = ".", tim
         passed = int(passed_match.group(1)) if passed_match else len(re.findall(r"\bPASSED\b", output))
         failed = int(failed_match.group(1)) if failed_match else len(re.findall(r"\bFAILED\b", output))
         errors = int(error_match.group(1)) if error_match else len(re.findall(r"\bERROR\b", output))
-    
-    all_passed = (result["success"] or result["metadata"].get("exit_code") == 0) and failed == 0 and errors == 0 and passed > 0
-    
+
+    exit_code = result.get("metadata", {}).get("exit_code", 0 if result["success"] else 1)
+    cmd_succeeded = (result["success"] or exit_code == 0)
+
+    # Determine all_passed:
+    # 1. Non-zero exit code or any parsed failures/errors ALWAYS causes failure
+    # 2. For custom/detected commands (e.g. npm test, cargo test, make test):
+    #    If the command exits with 0 and reports no failures, verification succeeds
+    #    without fabricating test counts (passed remains 0 if output has no counts).
+    # 3. For standard pytest/unittest runner:
+    #    Requires exit code 0, 0 failures, and at least 1 passed test.
+    if not cmd_succeeded or failed > 0 or errors > 0:
+        all_passed = False
+    elif test_cmd or detected_cmd:
+        all_passed = True
+    else:
+        all_passed = (passed > 0)
+
     result["metadata"].update({
         "passed": passed,
         "failed": failed,
         "errors": errors,
         "all_passed": all_passed,
+        "command": executed_cmd,
     })
-    
+
     return result
 
 
@@ -402,17 +454,17 @@ TOOL_REGISTRY = {
 
 def execute_tool(action: dict, repo_path: str) -> dict:
     """Execute a tool action.
-    
+
     Args:
         action: Dict with 'action' and 'arguments' keys.
         repo_path: Repository root path.
-        
+
     Returns:
         Tool result dict.
     """
     tool_name = action.get("action", "")
     arguments = action.get("arguments", {})
-    
+
     if tool_name not in TOOL_REGISTRY:
         return {
             "success": False,
@@ -420,7 +472,7 @@ def execute_tool(action: dict, repo_path: str) -> dict:
             "output": "",
             "metadata": {},
         }
-    
+
     if tool_name == "finish":
         return {
             "success": True,
@@ -428,12 +480,12 @@ def execute_tool(action: dict, repo_path: str) -> dict:
             "error": "",
             "metadata": {"finished": True},
         }
-    
+
     tool_func = TOOL_REGISTRY[tool_name]["function"]
-    
+
     # Inject repo_path into arguments
     arguments["repo_path"] = repo_path
-    
+
     try:
         return tool_func(**arguments)
     except TypeError as e:

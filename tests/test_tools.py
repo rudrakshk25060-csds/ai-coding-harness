@@ -205,3 +205,118 @@ def test_run_tests_invalid_garbage_output(monkeypatch):
     res = run_tests(repo_path=".")
     assert res["metadata"]["passed"] == 0
     assert res["metadata"]["all_passed"] is False
+
+
+def test_safe_path_prefix_confusion(tmp_path):
+    """Path containment must not confuse sibling directory prefixes."""
+    project = tmp_path / "project"
+    project.mkdir()
+    project_other = tmp_path / "project-other"
+    project_other.mkdir()
+
+    # ALLOWED: inside project
+    f1 = project / "file.py"
+    f1.write_text("x = 1")
+    assert _safe_path("file.py", str(project)) == str(f1.resolve())
+
+    (project / "src").mkdir()
+    f2 = project / "src" / "test.py"
+    f2.write_text("assert True")
+    assert _safe_path("src/test.py", str(project)) == str(f2.resolve())
+
+    # BLOCKED: prefix confusion (/tmp/project-other/file.py must be blocked)
+    f_other = project_other / "file.py"
+    f_other.write_text("secret = True")
+    with pytest.raises(ToolError, match="outside the repository"):
+        _safe_path(str(f_other), str(project))
+
+    # BLOCKED: relative traversal into sibling prefix
+    with pytest.raises(ToolError, match="outside the repository"):
+        _safe_path("../project-other/file.py", str(project))
+
+    # BLOCKED: parent dir file (/tmp/file.py)
+    f_parent = tmp_path / "file.py"
+    f_parent.write_text("parent = True")
+    with pytest.raises(ToolError, match="outside the repository"):
+        _safe_path(str(f_parent), str(project))
+
+
+def test_generalized_secret_protection_all_keys(monkeypatch):
+    """Verify secret protection covers all required provider keys."""
+    keys = [
+        "AI_API_KEY",
+        "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "QWEN_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ]
+    for key in keys:
+        res = run_command(f"echo ${key}")
+        assert res["success"] is False, f"Expected {key} exposure via echo to be blocked"
+        assert "Cannot expose API keys" in res["error"]
+
+        res = run_command(f"printenv {key}")
+        assert res["success"] is False, f"Expected {key} exposure via printenv to be blocked"
+        assert "Cannot expose API keys" in res["error"]
+
+    # Verify that documentation searches containing the variable name are NOT blocked
+    doc_search = run_command("grep -rn 'GEMINI_API_KEY' README.md")
+    # This command should execute normally (not blocked by the secret shield)
+    assert "Cannot expose API keys" not in doc_search.get("error", "")
+
+    # Verify secret value redaction from command output
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-secret-deepseek-token-999")
+    res_clean = run_command('python -c "print(\'sk-secret-deepseek-token-999\')"')
+    assert "sk-secret-deepseek-token-999" not in res_clean["output"]
+    assert "[REDACTED]" in res_clean["output"]
+
+
+def test_detect_test_command(tmp_path):
+    """Lightweight test command detection identifies common ecosystem markers."""
+    from harness.tools import detect_test_command
+
+    # Empty dir defaults to empty string (which falls back to pytest)
+    assert detect_test_command(str(tmp_path)) == ""
+
+    # Node.js
+    (tmp_path / "package.json").write_text("{}")
+    assert detect_test_command(str(tmp_path)) == "npm test"
+    (tmp_path / "package.json").unlink()
+
+    # Go
+    (tmp_path / "go.mod").write_text("module example.com/app")
+    assert detect_test_command(str(tmp_path)) == "go test ./..."
+    (tmp_path / "go.mod").unlink()
+
+    # Rust
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = 'app'")
+    assert detect_test_command(str(tmp_path)) == "cargo test"
+
+
+def test_run_tests_custom_command_exits_zero_unrecognized_output(monkeypatch):
+    """Custom command exiting 0 with unrecognized output passes without fabricating passed counts."""
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": True,
+        "output": "Project test suite completed successfully with no errors.",
+        "error": "",
+        "metadata": {"exit_code": 0},
+    })
+    res = run_tests(test_cmd="npm test", repo_path=".")
+    assert res["metadata"]["all_passed"] is True
+    # Crucial: test count must NOT be fabricated (remains 0 if unparseable)
+    assert res["metadata"]["passed"] == 0
+    assert res["metadata"]["failed"] == 0
+    assert res["metadata"]["command"] == "npm test"
+
+
+def test_run_tests_custom_command_exits_nonzero_fails(monkeypatch):
+    """Custom command exiting non-zero fails verification."""
+    monkeypatch.setattr("harness.tools.run_command", lambda cmd, repo, timeout: {
+        "success": False,
+        "output": "npm ERR! Test failed. See output above.",
+        "error": "Exit code: 1",
+        "metadata": {"exit_code": 1},
+    })
+    res = run_tests(test_cmd="npm test", repo_path=".")
+    assert res["metadata"]["all_passed"] is False
